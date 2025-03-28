@@ -15,7 +15,7 @@ import hashlib
 import time
 
 MAGIC = "5f501a8e1ac815293bc23e72f126a8a4"
-BUS = 0
+BUS = 1
 GET_CONFIG_CAN_ID = 513
 SET_CONFIG_CAN_ID = 0x200
 
