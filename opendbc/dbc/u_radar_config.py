@@ -9,15 +9,21 @@
 #
 # THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+import cantools.database
 from panda import Panda
 from opendbc.car.structs import CarParams
 import hashlib
 import time
+import cantools
 
-MAGIC = "5f501a8e1ac815293bc23e72f126a8a4"
+db = cantools.database.load_file(
+    "u_radar.dbc"
+)  # Load the DBC file for the radar configuration
+
 BUS = 1
-GET_CONFIG_CAN_ID = 513
+GET_CONFIG_CAN_ID = 0x201
 SET_CONFIG_CAN_ID = 0x200
+
 
 def get_config_msg(msgs):
     val = None
@@ -29,27 +35,85 @@ def get_config_msg(msgs):
             break
     return val
 
-def config_is_correct(val):
-    hash_val = hashlib.md5(val).hexdigest()
-    if hash_val == MAGIC:
-        return True
-    return False
+def build_config(
+    max_distance=160,
+    sensor_id=0,
+    output_type=1,
+    enable_quality=True,
+    enable_ext_info=True,
+    enable_sort_by_distance=False,
+    enable_high_sensitivity=False,
+    write_config=True,
+):
+    if max_distance < 0 or max_distance > 2048:
+        raise ValueError("max_distance must be between 0 and 2048")
+    config = {
+        "MaxDistance_Valid": 0,
+        "SensorID_Valid": 0,
+        "RadarPower_Valid": 0,
+        "OutputType_Valid": 0,
+        "SendQuality_Valid": 0,
+        "SendExtInfo_Valid": 0,
+        "SortIndex_Valid": 0,
+        "StoreInNvm_Valid": 0,
+        "MaxDistance": max_distance,
+        "SensorID": sensor_id,  # Sensor ID (0-255)
+        "OutputType": output_type,
+        "RadarPower": 0,
+        "SendQuality": enable_quality,
+        "SendExtInfo": enable_ext_info,
+        "SortIndex": enable_sort_by_distance,  # Sort by distance (0: No, 1: Yes)
+        "StoreNVM": write_config,  # Store in NVM (0: No, 1: Yes)
+        "RCS_Threshold_Valid": 0,
+        "RCS_Threshold": enable_high_sensitivity,  # RCS Threshold (0: Normal, 1: High Sensitivity)
+        "BaudRate_Valid": 0, # do not change baud rate
+        "BaudRate": 0,
+    }
+    return db.encode_message('Write_RadarConfig', config, scaling=False, padding=False)
 
-if __name__ == "__main__":
+def print_config(config, message_name='RadarState'):
+    """
+    Helper function to print the radar configuration in a readable format.
+    """
+    try:
+        decoded_config = db.decode_message(message_name, config)
+        for key, value in decoded_config.items():
+            print(f"{key}: {value}")
+    except Exception as e:
+        print(f"Failed to decode configuration: {e}")
+        return
+
+def main():
     panda = Panda()
     msgs = panda.can_recv()
     config_msg = get_config_msg(msgs)
     if config_msg is None:
         print("Radar Config Message not found, maybe on a different bus?")
-    else:
-        if not config_is_correct(config_msg):
-            print("Invalid Radar Configuration, Setting now...")
-            panda.set_safety_mode(CarParams.SafetyModel.allOutput)
-            panda.can_send(SET_CONFIG_CAN_ID, b'\x7F\x14\x00\x00\x08\x1D\x03\x10', BUS)
-            time.sleep(3)
-            msgs = panda.can_recv()
-            msg = get_config_msg(msgs)
-            print("Radar Configuration update successful." if config_is_correct(msg) else "Radar Configuration update failed, please try again.")
-        else:
-            print("Radar Configuration is correct.")
+        return
+    
+    print("Current Radar Configuration:")
+    print_config(config_msg)
+    
+    config_msg = build_config(
+        max_distance=100,
+        sensor_id=1,
+        output_type=2,
+        write_config=True,
+        enable_high_sensitivity=True,
+    )
+    print("Radar Config Message to be sent")
+    print_config(config_msg, message_name='Write_RadarConfig')
+    
+    print("Setting Radar Configuration...")
+    panda.set_safety_mode(CarParams.SafetyModel.allOutput)
+    print(config_msg.hex())
+    panda.can_send(SET_CONFIG_CAN_ID, config_msg, BUS)
+    time.sleep(3)
+    msgs = panda.can_recv()
+    print_config(get_config_msg(msgs))
+    print("Radar Configuration update successful.")
+    
     panda.close()
+
+if __name__ == "__main__":
+    main()
